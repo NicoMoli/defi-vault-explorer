@@ -1,0 +1,21 @@
+{
+  "name": "defi-vault-explorer",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.0.8",
+  "scripts": {
+    "web:dev": "pnpm --filter @defi-vault-explorer/web dev",
+    "web:lint": "pnpm --filter @defi-vault-explorer/web lint",
+    "web:build": "pnpm --filter @defi-vault-explorer/web build",
+    "api:dev": "cargo run --manifest-path apps/api/Cargo.toml",
+    "api:fmt": "cargo fmt --manifest-path apps/api/Cargo.toml --check",
+    "api:clippy": "cargo clippy --manifest-path apps/api/Cargo.toml --all-targets --all-features -- -D warnings",
+    "api:test": "cargo test --manifest-path apps/api/Cargo.toml"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "sharp",
+      "unrs-resolver"
+    ]
+  }
+}
