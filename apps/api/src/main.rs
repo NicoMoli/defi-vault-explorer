@@ -6,10 +6,10 @@ const DEFAULT_BIND_ADDRESS: &str = "127.0.0.1:4000";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct HealthResponse {
-    status: &'static str,
-    service: &'static str,
-    chain: &'static str,
-    data_mode: &'static str,
+    status: String,
+    service: String,
+    chain: String,
+    data_mode: String,
 }
 
 fn app() -> Router {
@@ -21,10 +21,10 @@ fn app() -> Router {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
-        status: "ok",
-        service: "defi-vault-explorer-api",
-        chain: "base",
-        data_mode: "mock",
+        status: "ok".to_string(),
+        service: "defi-vault-explorer-api".to_string(),
+        chain: "base".to_string(),
+        data_mode: "mock".to_string(),
     })
 }
 
@@ -77,10 +77,10 @@ mod tests {
         assert_eq!(
             payload,
             HealthResponse {
-                status: "ok",
-                service: "defi-vault-explorer-api",
-                chain: "base",
-                data_mode: "mock",
+                status: "ok".to_string(),
+                service: "defi-vault-explorer-api".to_string(),
+                chain: "base".to_string(),
+                data_mode: "mock".to_string(),
             }
         );
     }
