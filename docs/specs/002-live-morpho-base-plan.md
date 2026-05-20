@@ -6,7 +6,9 @@ This plan implements `docs/specs/002-live-morpho-base.md`.
 
 ## Current Gate
 
-Status: planning. Do not write code until this plan is reviewed.
+Status: approved and implemented. The three open decisions below were resolved
+with the documented defaults — vault cap 25, the risk thresholds in
+`scoring/mod.rs`, and a separate ADR `004`.
 
 ## Assumptions
 

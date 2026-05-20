@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft. Review gate before any implementation.
+Approved and implemented in iteration 002. See ADR
+`docs/architecture/004-live-morpho-data.md`.
 
 ## Relationship to Prior Docs
 
