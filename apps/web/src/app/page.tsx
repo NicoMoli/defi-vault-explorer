@@ -1,12 +1,13 @@
-// Home page: an async Server Component that fetches the live vault list from
-// the API and renders it as a table. Handles populated, empty, and error
-// states. No browser-side API calls.
-
-import { VaultTable, type Vault } from "@/components/vaults/VaultTable";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { DashboardHeader } from "@/components/dashboard/header";
+import { StatsCards } from "@/components/dashboard/stats-cards";
+import { TvlChart } from "@/components/dashboard/tvl-chart";
+import { ChainDistribution } from "@/components/dashboard/chain-distribution";
+import { TopVaults } from "@/components/dashboard/top-vaults";
+import { VaultsTable, type Vault } from "@/components/dashboard/vaults-table";
 
 const API_URL = process.env.API_URL ?? "http://127.0.0.1:4000";
 
-/** Fetch the live vault list. Throws on any non-OK response. */
 async function getVaults(): Promise<Vault[]> {
   const response = await fetch(`${API_URL}/vaults`, { cache: "no-store" });
   if (!response.ok) {
@@ -17,18 +18,21 @@ async function getVaults(): Promise<Vault[]> {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto w-full max-w-5xl px-6 py-12">
-      <header className="mb-8">
-        <h1 className="text-2xl font-semibold text-slate-900">
-          DeFi Vault Explorer
-        </h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Live Morpho vaults on Base, compared by transparent safety signals.
-          This is risk context, not investment advice.
-        </p>
-      </header>
-      {children}
-    </main>
+    <div className="min-h-screen bg-background">
+      <DashboardHeader />
+      <main className="container mx-auto px-4 py-8">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold text-foreground text-balance">
+            Morpho Vaults Dashboard
+          </h1>
+          <p className="mt-2 text-muted-foreground text-pretty">
+            Live Morpho vaults on Base, compared by transparent safety signals.
+            This is risk context, not investment advice.
+          </p>
+        </div>
+        {children}
+      </main>
+    </div>
   );
 }
 
@@ -40,13 +44,13 @@ export default async function Home() {
     const detail = error instanceof Error ? error.message : "unknown error";
     return (
       <Shell>
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900">
-          <p className="font-medium">Live vault data is unavailable.</p>
-          <p className="mt-1 text-amber-800">
+        <Alert variant="destructive">
+          <AlertTitle>Live vault data is unavailable</AlertTitle>
+          <AlertDescription>
             The API could not be reached ({detail}). Stale data is never shown
             as fresh — try again shortly.
-          </p>
-        </div>
+          </AlertDescription>
+        </Alert>
       </Shell>
     );
   }
@@ -54,9 +58,13 @@ export default async function Home() {
   if (vaults.length === 0) {
     return (
       <Shell>
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
-          No vaults are available right now.
-        </div>
+        <Alert>
+          <AlertTitle>No vaults right now</AlertTitle>
+          <AlertDescription>
+            The API returned an empty list. This usually means the upstream
+            provider has no Base vaults to report at the moment.
+          </AlertDescription>
+        </Alert>
       </Shell>
     );
   }
@@ -65,12 +73,24 @@ export default async function Home() {
 
   return (
     <Shell>
-      <VaultTable vaults={vaults} />
-      {updatedAt ? (
-        <p className="mt-3 text-xs text-slate-500">
-          Source: Morpho API · refreshed {updatedAt}
-        </p>
-      ) : null}
+      <div className="space-y-8">
+        <StatsCards vaults={vaults} />
+
+        <div className="grid gap-6 lg:grid-cols-3">
+          <TvlChart />
+          <ChainDistribution />
+        </div>
+
+        <VaultsTable vaults={vaults} />
+
+        <TopVaults />
+
+        {updatedAt ? (
+          <p className="text-xs text-muted-foreground">
+            Source: Morpho API · refreshed {updatedAt}
+          </p>
+        ) : null}
+      </div>
     </Shell>
   );
 }
