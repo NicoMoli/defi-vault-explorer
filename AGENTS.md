@@ -12,20 +12,25 @@ Morpho Vaults on the Base chain.
 - **Backend:** `apps/api` — Rust API skeleton targeting Axum.
 - **Monorepo:** pnpm workspace (`apps/web`) + Cargo workspace (`apps/api`).
 
-## Workflow — spec-driven, review gate (required)
+## Workflow
 
-This project follows spec-driven development. **Do not write implementation
-code until the spec, plan, and tasks for the iteration have been reviewed and
-approved by the maintainer.**
+There is no mandatory spec gate — for small or exploratory changes, going
+straight to code is fine.
 
-For each iteration, the order is:
+When stress-testing a plan (e.g. via `grill-me` / `grill-with-docs`), capture
+decisions that are **hard to reverse and the result of a real trade-off** as an
+ADR (Architecture Decision Record) in `docs/architecture/`. Don't write specs
+for this — ADRs record *why* a decision was made, after the fact, not a plan of
+what to build.
 
-1. Spec — `docs/specs/NNN-*.md`
-2. Plan — `docs/specs/NNN-*-plan.md`
-3. Tasks — `docs/specs/NNN-*-tasks.md`
-4. Implementation — only after 1–3 are approved.
+Specs are optional. The existing `docs/specs/` files are kept as historical
+record; the convention there is a numbered spec plus matching `-plan.md` and
+`-tasks.md`, used only when the maintainer explicitly asks.
 
-Architecture decisions live in `docs/architecture/`.
+Before coding or proposing a design, read the domain guide:
+[`docs/agents/domain.md`](docs/agents/domain.md). It points at `CONTEXT.md` (the
+glossary of the project's language) and the ADRs, and explains how to use and
+maintain them.
 
 ## Commands
 
