@@ -117,5 +117,16 @@ one upstream fetch is ever in flight.
 - On-chain verification of Morpho's reported numbers (carried over from ADR 004).
 - Whether to expose readiness ("cache warm") distinctly from liveness — would
   reintroduce a use for `watch`-style change notification.
+- **Cold-start outage serializes rather than coalesces.** Single-flight collapses
+  concurrent misses only when the fetch *succeeds* (it fills the cache, the
+  waiters re-read and skip). When the cache is empty *and* upstream is down, each
+  waiter acquires the gate in turn and issues its own fetch, so N concurrent cold
+  requests incur N *sequential* upstream timeouts — the Nth waits ~N×timeout. The
+  background backoff does not help here (separate trigger). Acceptable for now;
+  revisit if cold-start-under-outage latency matters (e.g. cache a short-lived
+  "last fetch failed" marker, or a fetch timeout).
+- **No floor on `refresh_interval`.** `REFRESH_INTERVAL_SECS=0` makes `base = 0`,
+  so a failing refresh backs off to `0 × 2 = 0` and busy-loops against upstream.
+  Consider clamping the parsed interval to a sane minimum.
 - Filters, a vault detail page, more chains, or a second data provider — each
   still gated to a later iteration.
