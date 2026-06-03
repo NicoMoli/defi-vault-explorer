@@ -1,59 +1,52 @@
-//! A minimal in-memory TTL cache.
+//! A minimal in-memory snapshot store.
 //!
-//! One value, guarded by an async `RwLock`. Entries past their TTL are still
-//! readable as a stale snapshot — callers decide whether to use them — but a
-//! `fresh` read only returns a value within the TTL window.
+//! One value, guarded by a `std::sync::RwLock`. Many readers can hold the
+//! snapshot concurrently; a write briefly takes the exclusive guard to swap the
+//! value. There is no freshness gate here anymore (ADR 005): the store hands
+//! back whatever is present, and the value's own `source.updated_at` states its
+//! age.
+//!
+//! ## Why `std::sync::RwLock` and not `tokio::sync::RwLock`?
+//!
+//! The Tokio docs are explicit: prefer the std lock in async code, and reach
+//! for the async lock *only* when a guard must be held across an `.await`.
+//! Here the critical sections are tiny and fully synchronous — `snapshot`
+//! clones the value and drops the guard in one expression; `store` swaps and
+//! drops. No guard ever crosses an `.await`, so the std lock is the lighter,
+//! preferred choice and these methods need not be `async`.
+//!
+//! (The single-flight `Mutex` in `state.rs` is the opposite case — it *is* held
+//! across the upstream fetch's `.await`, so that one must be `tokio::sync`.)
 
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::{Arc, RwLock};
 
-use tokio::sync::RwLock;
-
-/// A cached value together with the instant it was stored.
-#[derive(Debug, Clone)]
-struct Cached<T> {
-    value: T,
-    fetched_at: Instant,
+/// A clonable handle to a single shared value behind an `RwLock`.
+///
+/// Cloning shares the same underlying slot (`Arc`), so every handle sees the
+/// same writes.
+#[derive(Debug, Clone, Default)]
+pub struct SnapshotStore<T> {
+    slot: Arc<RwLock<Option<T>>>,
 }
 
-/// A clonable handle to a single TTL-guarded value.
-#[derive(Debug, Clone)]
-pub struct TtlCache<T> {
-    ttl: Duration,
-    slot: Arc<RwLock<Option<Cached<T>>>>,
-}
-
-impl<T: Clone> TtlCache<T> {
-    /// Create an empty cache with the given time-to-live.
-    pub fn new(ttl: Duration) -> Self {
+impl<T: Clone> SnapshotStore<T> {
+    /// Create an empty store.
+    pub fn new() -> Self {
         Self {
-            ttl,
             slot: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Return the cached value only if it is still within its TTL.
-    pub async fn fresh(&self) -> Option<T> {
-        let guard = self.slot.read().await;
-        guard
-            .as_ref()
-            .filter(|cached| cached.fetched_at.elapsed() < self.ttl)
-            .map(|cached| cached.value.clone())
+    /// Return whatever is stored, if anything. Clones the value under a
+    /// short-lived read guard that is dropped before returning.
+    pub fn snapshot(&self) -> Option<T> {
+        self.slot.read().expect("snapshot lock poisoned").clone()
     }
 
-    /// Return whatever is cached, fresh or stale, if anything.
-    pub async fn snapshot(&self) -> Option<T> {
-        let guard = self.slot.read().await;
-        guard.as_ref().map(|cached| cached.value.clone())
-    }
-
-    /// Replace the cached value and reset its TTL window.
-    pub async fn store(&self, value: T) {
-        let mut guard = self.slot.write().await;
-        *guard = Some(Cached {
-            value,
-            fetched_at: Instant::now(),
-        });
+    /// Replace the stored value. The write guard is held only for the swap,
+    /// never across an upstream fetch.
+    pub fn store(&self, value: T) {
+        *self.slot.write().expect("snapshot lock poisoned") = Some(value);
     }
 }
 
@@ -61,30 +54,32 @@ impl<T: Clone> TtlCache<T> {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn fresh_returns_value_within_ttl() {
-        let cache = TtlCache::new(Duration::from_secs(60));
-        assert_eq!(cache.fresh().await, None);
-
-        cache.store(vec![1, 2, 3]).await;
-        assert_eq!(cache.fresh().await, Some(vec![1, 2, 3]));
+    #[test]
+    fn empty_store_has_no_snapshot() {
+        let store: SnapshotStore<Vec<i32>> = SnapshotStore::new();
+        assert_eq!(store.snapshot(), None);
     }
 
-    #[tokio::test]
-    async fn expired_entry_is_not_fresh_but_is_a_snapshot() {
-        let cache = TtlCache::new(Duration::ZERO);
-        cache.store(vec![1, 2, 3]).await;
-
-        // A zero TTL means the entry is stale the instant it is stored.
-        assert_eq!(cache.fresh().await, None);
-        assert_eq!(cache.snapshot().await, Some(vec![1, 2, 3]));
+    #[test]
+    fn store_then_snapshot_returns_the_value() {
+        let store = SnapshotStore::new();
+        store.store(vec![1, 2, 3]);
+        assert_eq!(store.snapshot(), Some(vec![1, 2, 3]));
     }
 
-    #[tokio::test]
-    async fn store_refreshes_the_ttl_window() {
-        let cache = TtlCache::new(Duration::from_secs(60));
-        cache.store(vec![1]).await;
-        cache.store(vec![2]).await;
-        assert_eq!(cache.fresh().await, Some(vec![2]));
+    #[test]
+    fn store_overwrites_the_previous_value() {
+        let store = SnapshotStore::new();
+        store.store(vec![1]);
+        store.store(vec![2]);
+        assert_eq!(store.snapshot(), Some(vec![2]));
+    }
+
+    #[test]
+    fn clones_share_one_slot() {
+        let a = SnapshotStore::new();
+        let b = a.clone();
+        a.store(vec![42]);
+        assert_eq!(b.snapshot(), Some(vec![42]));
     }
 }

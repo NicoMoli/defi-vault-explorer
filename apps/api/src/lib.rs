@@ -8,6 +8,7 @@ pub mod config;
 pub mod domain;
 pub mod error;
 pub mod providers;
+pub mod refresh;
 pub mod routes;
 pub mod scoring;
 pub mod state;
