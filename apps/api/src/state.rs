@@ -1,54 +1,84 @@
-//! Application state: the provider handle plus the vault cache, and the
-//! lazy-refresh logic that ties them together.
+//! Application state: the provider handle, the vault snapshot store, and the
+//! single-flight gate that coordinates the two fetch trigger sources.
+//!
+//! Two locks, two jobs (ADR 005):
+//! - the `RwLock` inside [`SnapshotStore`] guards the *data* — many readers,
+//!   one brief writer per swap;
+//! - the `fetch_gate` `Mutex` guards the *act of fetching* — at most one
+//!   upstream call in flight across the whole process, so concurrent misses and
+//!   the background timer never stampede Morpho.
 
 use std::sync::Arc;
-use std::time::Duration;
 
-use crate::cache::TtlCache;
+use tokio::sync::Mutex;
+
+use crate::cache::SnapshotStore;
 use crate::domain::Vault;
 use crate::error::ApiError;
 use crate::providers::VaultProvider;
 
-/// Shared, clonable state handed to every route handler.
+/// Shared, clonable state handed to every route handler and to the background
+/// refresh task.
 #[derive(Clone)]
 pub struct AppState {
     provider: Arc<dyn VaultProvider>,
-    cache: TtlCache<Vec<Vault>>,
+    store: SnapshotStore<Vec<Vault>>,
+    /// Single-flight gate: held across an upstream fetch so only one runs at a
+    /// time. Guards an action, not data — hence `Mutex<()>`.
+    fetch_gate: Arc<Mutex<()>>,
 }
 
 impl AppState {
-    /// Wire a provider to a fresh cache with the given TTL.
-    pub fn new(provider: Arc<dyn VaultProvider>, cache_ttl: Duration) -> Self {
+    /// Wire a provider to a fresh, empty snapshot store.
+    pub fn new(provider: Arc<dyn VaultProvider>) -> Self {
         Self {
             provider,
-            cache: TtlCache::new(cache_ttl),
+            store: SnapshotStore::new(),
+            fetch_gate: Arc::new(Mutex::new(())),
         }
     }
 
-    /// Return the vault list, refreshing lazily when the cache has expired.
+    /// Return the vault list for a request.
     ///
-    /// On a refresh failure the last successful snapshot is served if one
-    /// exists — its `source.updated_at` still reflects its true age, so stale
-    /// data is never presented as fresh. Only an empty cache surfaces the
-    /// cold-start `upstream_unavailable` error.
+    /// Serve whatever Snapshot is present, fresh *or* stale (ADR 005): staleness
+    /// alone never triggers a fetch. Only an **empty** cache fills on demand,
+    /// behind the single-flight gate with a double-checked re-read so concurrent
+    /// cold misses collapse into one upstream call. A `503 upstream_unavailable`
+    /// survives only when the cache is empty *and* the fetch fails.
     pub async fn vaults(&self) -> Result<Vec<Vault>, ApiError> {
-        if let Some(vaults) = self.cache.fresh().await {
+        // Fast path: serve the present snapshot, holding no gate.
+        if let Some(vaults) = self.store.snapshot() {
             return Ok(vaults);
         }
 
-        match self.provider.fetch_vaults().await {
-            Ok(vaults) => {
-                self.cache.store(vaults.clone()).await;
-                Ok(vaults)
-            }
-            Err(err) => match self.cache.snapshot().await {
-                Some(stale) => {
-                    tracing::warn!(%err, "serving stale vault snapshot after refresh failure");
-                    Ok(stale)
-                }
-                None => Err(err),
-            },
+        // Empty cache: take the gate so at most one of us fetches.
+        let _gate = self.fetch_gate.lock().await;
+
+        // Double-checked read: someone may have filled the cache while we waited
+        // for the gate. If so, serve it and skip the fetch.
+        if let Some(vaults) = self.store.snapshot() {
+            return Ok(vaults);
         }
+
+        // Still empty and we hold the gate: this fetch is the single flight.
+        self.fetch_and_store().await
+    }
+
+    /// Refresh the cache through the single-flight gate, replacing the snapshot
+    /// on success. Used by the background task; shares the *same* gate as the
+    /// on-demand path so the timer and a cold request can never double-fetch.
+    pub async fn refresh(&self) -> Result<(), ApiError> {
+        let _gate = self.fetch_gate.lock().await;
+        self.fetch_and_store().await.map(|_| ())
+    }
+
+    /// Fetch from the provider and store the result. The caller must hold the
+    /// `fetch_gate`. The gate (not the store's write lock) is what is held
+    /// across the slow upstream call, so readers keep serving the old snapshot.
+    async fn fetch_and_store(&self) -> Result<Vec<Vault>, ApiError> {
+        let vaults = self.provider.fetch_vaults().await?;
+        self.store.store(vaults.clone());
+        Ok(vaults)
     }
 
     /// Look up a single vault by address (case-insensitive) from the cache.

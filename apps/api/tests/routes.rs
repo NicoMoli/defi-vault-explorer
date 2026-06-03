@@ -2,6 +2,7 @@
 //! cold-start path — all offline, against fake providers.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
@@ -46,7 +47,7 @@ fn fixture_state() -> AppState {
     let provider = Arc::new(FixtureProvider {
         vaults: fixture_vaults(),
     });
-    AppState::new(provider, Duration::from_secs(60))
+    AppState::new(provider)
 }
 
 async fn get(state: AppState, uri: &str) -> (StatusCode, Value) {
@@ -103,8 +104,68 @@ async fn unknown_vault_address_returns_typed_404() {
 
 #[tokio::test]
 async fn cold_start_upstream_failure_returns_typed_503() {
-    let state = AppState::new(Arc::new(FailingProvider), Duration::from_secs(60));
+    let state = AppState::new(Arc::new(FailingProvider));
     let (status, body) = get(state, "/vaults").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], "upstream_unavailable");
+}
+
+/// A provider that counts fetches and stalls briefly, so concurrent callers
+/// overlap inside the fetch window — exercising the single-flight gate.
+struct CountingProvider {
+    vaults: Vec<Vault>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl VaultProvider for CountingProvider {
+    fn fetch_vaults(&self) -> VaultFetch<'_> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let vaults = self.vaults.clone();
+        Box::pin(async move {
+            // Hold the gate long enough that all spawned callers pile up behind it.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok(vaults)
+        })
+    }
+}
+
+#[tokio::test]
+async fn concurrent_cold_misses_coalesce_into_one_fetch() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let state = AppState::new(Arc::new(CountingProvider {
+        vaults: fixture_vaults(),
+        calls: calls.clone(),
+    }));
+
+    // Fire many concurrent requests against an empty cache.
+    let handles: Vec<_> = (0..16)
+        .map(|_| {
+            let state = state.clone();
+            tokio::spawn(async move { state.vaults().await })
+        })
+        .collect();
+
+    for handle in handles {
+        let vaults = handle.await.expect("task joins").expect("vaults served");
+        assert_eq!(vaults.len(), 6);
+    }
+
+    // Single-flight: only the first miss reached the provider.
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn refresh_warms_an_empty_cache() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let state = AppState::new(Arc::new(CountingProvider {
+        vaults: fixture_vaults(),
+        calls: calls.clone(),
+    }));
+
+    state.refresh().await.expect("refresh succeeds");
+
+    // After a refresh, reads serve from cache without another fetch.
+    let vaults = state.vaults().await.expect("vaults served");
+    assert_eq!(vaults.len(), 6);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
