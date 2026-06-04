@@ -10,12 +10,16 @@
     "api:dev": "cargo run --manifest-path apps/api/Cargo.toml",
     "api:fmt": "cargo fmt --manifest-path apps/api/Cargo.toml --check",
     "api:clippy": "cargo clippy --manifest-path apps/api/Cargo.toml --all-targets --all-features -- -D warnings",
-    "api:test": "cargo test --manifest-path apps/api/Cargo.toml"
+    "api:test": "cargo test --manifest-path apps/api/Cargo.toml",
+    "check": "turbo run lint build test //#api:fmt //#api:clippy //#api:test"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
       "sharp",
       "unrs-resolver"
     ]
+  },
+  "devDependencies": {
+    "turbo": "^2.9.16"
   }
 }
